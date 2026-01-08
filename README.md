@@ -1,6 +1,6 @@
-# Puzzle Solver
+# N-Puzzle Problem Generator and Solver
 
-Fast Rust-based Python extension for N-puzzle operations. Uses A* with Manhattan distance + linear conflict heuristics. Parallelized via Rayon.
+Fast Rust-based Python extension for N-puzzle problem generation and solving. Uses A* with Manhattan distance + linear conflict heuristics. Parallelized via Rayon.
 
 ## Installation
 
