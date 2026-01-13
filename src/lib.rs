@@ -367,7 +367,7 @@ fn compute_heuristic(state: Vec<u8>, goal_state: Vec<u8>, size_x: usize, size_y:
 ///     fixed_goal: Whether to use a fixed goal state (default False)
 ///
 /// Returns:
-///     Tuple of (start_state, end_state, action) as flattened lists, or None
+///     Tuple of (start_state, end_state, first_action, target_distance) as flattened lists, or None
 fn generate_pair_internal(
     target_distance: u32,
     max_attempts: u32,
@@ -375,7 +375,7 @@ fn generate_pair_internal(
     size_y: usize,
     verify: bool,
     fixed_goal: bool,
-) -> Option<(Vec<u8>, Vec<u8>, u8)> {
+) -> Option<(Vec<u8>, Vec<u8>, u8, u32)> {
     for _ in 0..max_attempts {
         let mut end = PuzzleState::random(size_x, size_y);
         if fixed_goal {
@@ -385,11 +385,11 @@ fn generate_pair_internal(
 
         // verification only for 3x3
         if size_x != 3 || size_y != 3 {
-            eprintln!("\x1b[1;33m[warning]\x1b[0m \x1b[33mMinimal distance verification is only implemented for 3x3 puzzles. Returning random state pair without minimal distance guarantee.\x1b[0m");
             return Some((
                 start.tiles,
                 end.tiles,
                 PuzzleState::opposite_action(path[path.len() - 1]),
+                target_distance,
             ));
         }
 
@@ -398,13 +398,14 @@ fn generate_pair_internal(
                 start.tiles,
                 end.tiles,
                 PuzzleState::opposite_action(path[path.len() - 1]),
+                target_distance,
             ));
         }
 
         // Verify actual distance with A*
         if let (Some(path), _) = a_star_search(start.clone(), end.clone(), target_distance + 5) {
             if path.len() as u32 == target_distance {
-                return Some((start.tiles.clone(), end.tiles.clone(), path[0]));
+                return Some((start.tiles.clone(), end.tiles.clone(), path[0], target_distance));
             }
         }
     }
@@ -420,7 +421,7 @@ fn generate_pair(
     size_y: usize,
     verify: bool,
     fixed_goal: bool,
-) -> Option<(Vec<u8>, Vec<u8>, u8)> {
+) -> Option<(Vec<u8>, Vec<u8>, u8, u32)> {
     generate_pair_internal(
         target_distance,
         max_attempts,
@@ -431,49 +432,18 @@ fn generate_pair(
     )
 }
 
-/// Generate a single pair of states with backtracking. Therefore the provided target distance is not minimal.
+/// Generate multiple pairs of states at an exact distance (batch version), with parallelization.
 ///
 /// Args:
-///     target_distance: The exact optimal distance between the states
+///     target_distances: List of required distances (one for each pair to generate)
+///     max_attempts_per_pair: Maximum number of attempts for each pair (default: 1000)
+///     size_x: Width of the puzzle (default: 3)
+///     size_y: Height of the puzzle (default: 3)
+///     verify: Whether to verify minimal distance with A* (default: true)
+///     fixed_goal: Use a fixed (canonical) goal state (default: false)
 ///
 /// Returns:
-///     Tuple of (start_state, end_state, action) as flattened lists, or None
-#[pyfunction]
-#[pyo3(signature = (target_distance, size_x=3, size_y=3))]
-fn generate_pair_with_backtracking(
-    target_distance: u32,
-    size_x: usize,
-    size_y: usize,
-) -> Option<(Vec<u8>, Vec<u8>, u8)> {
-    let start = PuzzleState::random(size_x, size_y);
-    let (end, first_action) = start.random_walk_with_backtracking(target_distance as usize);
-    if let Some(first_action) = first_action {
-        return Some((start.tiles, end.tiles, first_action));
-    }
-    None
-}
-
-#[pyfunction]
-#[pyo3(signature = (target_distances, size_x=3, size_y=3))]
-fn generate_pairs_with_backtracking(
-    target_distances: Vec<u32>,
-    size_x: usize,
-    size_y: usize,
-) -> Vec<(Vec<u8>, Vec<u8>, u8)> {
-    target_distances
-        .par_iter()
-        .filter_map(|&dist| generate_pair_with_backtracking(dist, size_x, size_y))
-        .collect()
-}
-
-/// Generate multiple pairs of states at exact distance (batch version), parallelized
-///
-/// Args:
-///     target_distances: List of target distances (one per pair to generate)
-///     max_attempts_per_pair: Maximum attempts per pair (default 100)
-///
-/// Returns:
-///     List of (start_state, end_state) tuples as lists of tiles
+///     Vector of (start_state, end_state, first_action, target_distance) tuples as flat lists of u8 tiles.
 #[pyfunction]
 #[pyo3(signature = (target_distances, max_attempts_per_pair=1000, size_x=3, size_y=3, verify=true, fixed_goal=false))]
 fn generate_pairs(
@@ -483,14 +453,14 @@ fn generate_pairs(
     size_y: usize,
     verify: bool,
     fixed_goal: bool,
-) -> Vec<(Vec<u8>, Vec<u8>, u8)> {
+) -> Vec<(Vec<u8>, Vec<u8>, u8, u32)> {
     let pb = ProgressBar::new(target_distances.len() as u64);
     pb.set_style(ProgressStyle::default_bar()
         .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} Generating pairs without backtracking")
         .expect("Failed to set style")
         .progress_chars("##-"));
 
-    let results: Vec<(Vec<u8>, Vec<u8>, u8)> = target_distances
+    let results: Vec<(Vec<u8>, Vec<u8>, u8, u32)> = target_distances
         .par_iter()
         .map_init(
             || pb.clone(),
@@ -515,6 +485,43 @@ fn generate_pairs(
         .collect();
     pb.finish_with_message("Pairs generation without backtracking done.");
     results
+}
+
+/// Generate a single pair of states with immediate backtracking.
+///
+/// Args:
+///     target_distance: The exact optimal distance between the states
+///     size_x: Width of the puzzle (default: 3)
+///     size_y: Height of the puzzle (default: 3)
+///
+/// Returns:
+///     Tuple of (start_state, end_state, first_action, target_distance) as flattened lists, or None
+#[pyfunction]
+#[pyo3(signature = (target_distance, size_x=3, size_y=3))]
+fn generate_pair_with_backtracking(
+    target_distance: u32,
+    size_x: usize,
+    size_y: usize,
+) -> Option<(Vec<u8>, Vec<u8>, u8, u32)> {
+    let start = PuzzleState::random(size_x, size_y);
+    let (end, first_action) = start.random_walk_with_backtracking(target_distance as usize);
+    if let Some(first_action) = first_action {
+        return Some((start.tiles, end.tiles, first_action, target_distance));
+    }
+    None
+}
+
+#[pyfunction]
+#[pyo3(signature = (target_distances, size_x=3, size_y=3))]
+fn generate_pairs_with_backtracking(
+    target_distances: Vec<u32>,
+    size_x: usize,
+    size_y: usize,
+) -> Vec<(Vec<u8>, Vec<u8>, u8, u32)> {
+    target_distances
+        .par_iter()
+        .filter_map(|&dist| generate_pair_with_backtracking(dist, size_x, size_y))
+        .collect()
 }
 
 /// Limited DFS to find states at exact depth with same blank position
@@ -573,32 +580,32 @@ fn generate_pair_same_blank_internal(
     max_attempts: u32,
     size_x: usize,
     size_y: usize,
-) -> Option<(Vec<u8>, Vec<u8>, u8)> {
+) -> Option<(Vec<u8>, Vec<u8>, u8, u32)> {
     // warning
-    if size_x != 3 || size_y != 3 {
-        eprintln!("\x1b[1;33m[warning]\x1b[0m \x1b[33mIts not recommended to use this function for puzzles other than 3x3 due to computational complexity.\x1b[0m");
+    // if size_x != 3 || size_y != 3 {
+    //     eprintln!("\x1b[1;33m[warning]\x1b[0m \x1b[33mIts not recommended to use this function for puzzles other than 3x3 due to computational complexity.\x1b[0m");
+    // }
+    if target_distance % 2 == 0 {
+        panic!("target_distance must be odd for generate_pair_same_blank_internal");
     }
+
     for _ in 0..max_attempts {
-        let start_init = PuzzleState::random(size_x, size_y);
-        let mut start = start_init.clone();
-        // Make a random valid action to further randomize the starting state
-        let moves = start.get_valid_moves();
-        let _action = if !moves.is_empty() {
-            let a = moves[fastrand::usize(..moves.len())];
-            start = start_init.apply_move(a);
-            Some((a + 2) % 4)
-        } else {
-            None
-        };
+
+        let start_state = PuzzleState::random(size_x, size_y);
+
+        let moves = start_state.get_valid_moves();
+        let a = moves[fastrand::usize(..moves.len())];
+        
+        let successor_same_blank = start_state.apply_move(a);
 
         // Use DFS to find candidates at target depth with same blank position
         let mut candidates = Vec::new();
         dfs_same_blank(
-            &start,
+            &successor_same_blank,
             target_distance,
-            start_init.clone(),
-            1,
-            None,
+            start_state.clone(),
+            0,
+            Some(PuzzleState::opposite_action(a)),
             &mut candidates,
             100, // Collect up to 100 candidates per attempt
         );
@@ -608,14 +615,14 @@ fn generate_pair_same_blank_internal(
             // Randomly pick from candidates
             for _ in 0..candidates.len().min(10) {
                 let idx = fastrand::usize(..candidates.len());
-                let end = candidates[idx].clone();
+                let end_state = &candidates[idx];
 
                 // Verify actual distance with A*
                 if let (Some(path), _) =
-                    a_star_search(start.clone(), end.clone(), target_distance + 2)
+                    a_star_search(start_state.clone(), end_state.clone(), target_distance)
                 {
                     if path.len() as u32 == target_distance {
-                        return Some((start_init.tiles.clone(), end.tiles.clone(), path[1]));
+                        return Some((start_state.tiles.clone(), end_state.tiles.clone(), path[0], target_distance));
                     }
                 }
             }
@@ -631,7 +638,9 @@ fn generate_pair_same_blank_internal(
 ///     max_attempts: Maximum random starts before giving up (default 1000)
 ///
 /// Returns:
-///     Tuple of (start_state, end_state, action) as flattened lists, or None
+///     Tuple of (start_state, end_state, first_action) as flattened lists, or None
+/// 
+/// Note: The first action is the first action of the path from the start state to the end state.
 #[pyfunction]
 #[pyo3(signature = (target_distance, max_attempts=1000, size_x=3, size_y=3))]
 fn generate_pair_same_blank(
@@ -639,8 +648,8 @@ fn generate_pair_same_blank(
     max_attempts: u32,
     size_x: usize,
     size_y: usize,
-) -> Option<(Vec<u8>, Vec<u8>, u8)> {
-    generate_pair_same_blank_internal(target_distance + 1, max_attempts, size_x, size_y)
+) -> Option<(Vec<u8>, Vec<u8>, u8, u32)> {
+    generate_pair_same_blank_internal(target_distance, max_attempts, size_x, size_y)
 }
 
 /// Generate multiple pairs using DFS method (same blank position), parallelized
@@ -658,7 +667,7 @@ fn generate_pairs_same_blank(
     max_attempts_per_pair: u32,
     size_x: usize,
     size_y: usize,
-) -> Vec<(Vec<u8>, Vec<u8>, u8)> {
+) -> Vec<(Vec<u8>, Vec<u8>, u8, u32)> {
     // Fixed version: No extraneous code block, just the collection and progress bar in the function body
 
     let pb = ProgressBar::new(target_distances.len() as u64);
@@ -678,7 +687,7 @@ fn generate_pairs_same_blank(
             // Keep trying until we get a valid pair
             loop {
                 if let Some(pair) = generate_pair_same_blank_internal(
-                    dist + 1,
+                    dist,
                     max_attempts_per_pair,
                     size_x,
                     size_y,
@@ -714,6 +723,10 @@ fn generate_dataset(
     size_x: usize,
     size_y: usize,
 ) -> Vec<(Vec<u8>, Vec<u8>, u8, u32)> {
+    if size_x != 3 || size_y != 3 {
+        eprintln!("\x1b[1;33m[warning]\x1b[0m \x1b[33mIts not recommended to use this function for puzzles other than 3x3 due to computational complexity.\x1b[0m");
+    }
+
     let mut dataset = Vec::new();
 
     let valid_pairs_target = (n_samples as f64 * p_successor) as usize;
@@ -727,7 +740,7 @@ fn generate_dataset(
     );
 
     for _ in 0..valid_pairs_target {
-        if let Some((start_state, end_state, action)) =
+        if let Some((start_state, end_state, action, _)) =
             generate_pair_with_backtracking(1, size_x, size_y)
         {
             dataset.push((start_state.to_vec(), end_state.to_vec(), action, 1));
@@ -743,9 +756,9 @@ fn generate_dataset(
     let distances: Vec<u32> = (0..number_invalid_typ2_pairs)
         .map(|_| distro[fastrand::usize(..distro.len())])
         .collect();
-    let pairs = generate_pairs_same_blank(distances, 1000, size_x, size_y);
+    let pairs = generate_pairs_same_blank(distances.clone(), 1000, size_x, size_y);
     for pair in pairs {
-        dataset.push((pair.0.to_vec(), pair.1.to_vec(), 4, pair.2 as u32));
+        dataset.push((pair.0.to_vec(), pair.1.to_vec(), 4, pair.3));
     }
 
     let number_invalid_typ1_pairs = n_samples - dataset.len() as usize;
@@ -760,7 +773,7 @@ fn generate_dataset(
         .collect();
     let pairs = generate_pairs(distances, 1000, size_x, size_y, true, false);
     for pair in pairs {
-        dataset.push((pair.0.to_vec(), pair.1.to_vec(), 4, pair.2 as u32));
+        dataset.push((pair.0.to_vec(), pair.1.to_vec(), 4, pair.3 as u32));
     }
 
     println!("\x1b[1;32m[info]\x1b[0m \x1b[32mDataset generation done.\x1b[0m");
