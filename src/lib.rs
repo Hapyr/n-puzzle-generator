@@ -172,6 +172,7 @@ fn compute_positions(state: &PuzzleState) -> Vec<(usize, usize)> {
 }
 
 /// Manhattan distance + Linear conflict heuristic
+/// If the state is not a 3x3 puzzle, only the Manhattan distance is returned.
 fn heuristic(state: &PuzzleState, positions: &Vec<(usize, usize)>) -> u32 {
     let mut distance: u32 = 0;
 
@@ -187,6 +188,10 @@ fn heuristic(state: &PuzzleState, positions: &Vec<(usize, usize)>) -> u32 {
 
         distance += (curr_row as i32 - goal_row as i32).unsigned_abs()
             + (curr_col as i32 - goal_col as i32).unsigned_abs();
+    }
+
+    if state.size_x != 3 || state.size_y != 3 {
+        return distance;
     }
 
     // Linear conflicts in rows
@@ -346,6 +351,34 @@ fn solve_puzzle_with_stats(
     a_star_search(start, goal, max_depth)
 }
 
+// Find multiple candiate a star solutions for a given start and goal state
+// Therefor all one step actions from the start state are tried and a star search is performed for each of them.
+// Returns a vector of (action_sequence, nodes_visited) tuples.
+#[pyfunction]
+#[pyo3(signature = (start_state, goal_state, max_depth=100, size_x=3, size_y=3))]
+fn find_multiple_candidate_a_star_solutions(
+    start_state: Vec<u8>,
+    goal_state: Vec<u8>,
+    max_depth: u32,
+    size_x: usize,
+    size_y: usize,
+) -> Vec<Vec<u8>> {
+    let start = PuzzleState::from_flat(&start_state, size_x, size_y);
+    let goal = PuzzleState::from_flat(&goal_state, size_x, size_y);
+    let mut solutions = Vec::new();
+    for action in start.get_valid_moves() {
+        let next_state = start.apply_move(action);
+        let (path, _) = a_star_search(next_state.clone(), goal.clone(), max_depth - 1);
+        
+        // add start to the begin of the path
+        if let Some(mut path) = path {
+            path.insert(0, action);
+            solutions.push(path);
+        }
+    }
+    solutions
+}
+
 /// Python function: compute heuristic value between two states
 #[pyfunction]
 fn compute_heuristic(state: Vec<u8>, goal_state: Vec<u8>, size_x: usize, size_y: usize) -> u32 {
@@ -383,8 +416,8 @@ fn generate_pair_internal(
         }
         let (start, path) = end.random_walk(target_distance as usize);
 
-        // verification only for 3x3
-        if size_x != 3 || size_y != 3 {
+        // verification only for 2x2 to 4x3
+        if size_x + size_y >= 8 {
             return Some((
                 start.tiles,
                 end.tiles,
@@ -403,7 +436,7 @@ fn generate_pair_internal(
         }
 
         // Verify actual distance with A*
-        if let (Some(path), _) = a_star_search(start.clone(), end.clone(), target_distance + 5) {
+        if let (Some(path), _) = a_star_search(start.clone(), end.clone(), target_distance) {
             if path.len() as u32 == target_distance {
                 return Some((start.tiles.clone(), end.tiles.clone(), path[0], target_distance));
             }
@@ -638,7 +671,7 @@ fn generate_pair_same_blank_internal(
 ///     max_attempts: Maximum random starts before giving up (default 1000)
 ///
 /// Returns:
-///     Tuple of (start_state, end_state, first_action) as flattened lists, or None
+///     Tuple of (start_state, end_state, first_action, target_distance) as flattened lists, or None
 /// 
 /// Note: The first action is the first action of the path from the start state to the end state.
 #[pyfunction]
@@ -713,7 +746,7 @@ fn generate_pairs_same_blank(
 ///     size_y: Height of the puzzle
 /// 
 /// Returns:
-///     List of (start_state, end_state, action, distance) tuples as flattened lists
+///     List of (start_state, end_state, action, distance, first_action) tuples as flattened lists
 #[pyfunction]
 #[pyo3(signature = (n_samples=1000, p_successor=0.4, p_extended=0.3, size_x=3, size_y=3))]
 fn generate_dataset(
@@ -722,7 +755,7 @@ fn generate_dataset(
     p_extended: f64,
     size_x: usize,
     size_y: usize,
-) -> Vec<(Vec<u8>, Vec<u8>, u8, u32)> {
+) -> Vec<(Vec<u8>, Vec<u8>, u8, u32, u8)> {
     if size_x != 3 || size_y != 3 {
         eprintln!("\x1b[1;33m[warning]\x1b[0m \x1b[33mIts not recommended to use this function for puzzles other than 3x3 due to computational complexity.\x1b[0m");
     }
@@ -743,7 +776,7 @@ fn generate_dataset(
         if let Some((start_state, end_state, action, _)) =
             generate_pair_with_backtracking(1, size_x, size_y)
         {
-            dataset.push((start_state.to_vec(), end_state.to_vec(), action, 1));
+            dataset.push((start_state.to_vec(), end_state.to_vec(), action, 1, action));
         }
         pb.inc(1);
     }
@@ -758,7 +791,7 @@ fn generate_dataset(
         .collect();
     let pairs = generate_pairs_same_blank(distances.clone(), 1000, size_x, size_y);
     for pair in pairs {
-        dataset.push((pair.0.to_vec(), pair.1.to_vec(), 4, pair.3));
+        dataset.push((pair.0.to_vec(), pair.1.to_vec(), 4, pair.3, pair.2));
     }
 
     let number_invalid_typ1_pairs = n_samples - dataset.len() as usize;
@@ -773,7 +806,7 @@ fn generate_dataset(
         .collect();
     let pairs = generate_pairs(distances, 1000, size_x, size_y, true, false);
     for pair in pairs {
-        dataset.push((pair.0.to_vec(), pair.1.to_vec(), 4, pair.3 as u32));
+        dataset.push((pair.0.to_vec(), pair.1.to_vec(), 4, pair.3, pair.2));
     }
 
     println!("\x1b[1;32m[info]\x1b[0m \x1b[32mDataset generation done.\x1b[0m");
@@ -1196,8 +1229,8 @@ fn compare_datasets_parallel(n: usize, d1_n_samples: usize, d2_n_samples: usize)
 }
 
 fn number_of_equal_pairs(
-    dataset1: &Vec<(Vec<u8>, Vec<u8>, u8, u32)>,
-    dataset2: &Vec<(Vec<u8>, Vec<u8>, u8, u32)>,
+    dataset1: &Vec<(Vec<u8>, Vec<u8>, u8, u32, u8)>,
+    dataset2: &Vec<(Vec<u8>, Vec<u8>, u8, u32, u8)>,
 ) -> u32 {
     // calculate the number of equal pairs in the two datasets
     let pb = ProgressBar::new(dataset1.len() as u64);
@@ -1209,8 +1242,8 @@ fn number_of_equal_pairs(
     );
 
     let mut count = 0;
-    for (s1, e1, _a1, _d1) in dataset1 {
-        for (s2, e2, _a2, _d2) in dataset2 {
+    for (s1, e1, _a1, _d1, _fa1) in dataset1 {
+        for (s2, e2, _a2, _d2, _fa2) in dataset2 {
             if s1 == s2 && e1 == e2 {
                 count += 1;
             }
@@ -1238,5 +1271,6 @@ fn puzzle_solver(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compare_datasets_parallel, m)?)?;
     m.add_function(wrap_pyfunction!(pretty_print_state, m)?)?;
     m.add_function(wrap_pyfunction!(pretty_print_pair, m)?)?;
+    m.add_function(wrap_pyfunction!(find_multiple_candidate_a_star_solutions, m)?)?;
     Ok(())
 }
