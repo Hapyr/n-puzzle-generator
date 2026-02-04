@@ -7,14 +7,14 @@ use std::collections::{BinaryHeap, HashSet};
 /// State representation for 8-puzzle (3x3 grid as flat array)
 #[derive(Clone, Hash, Eq, PartialEq)]
 struct PuzzleState {
-    tiles: Vec<u8>,
+    tiles: Vec<u16>,
     blank_pos: usize,
     size_x: usize,
     size_y: usize,
 }
 
 impl PuzzleState {
-    fn from_flat(tiles: &[u8], size_x: usize, size_y: usize) -> Self {
+    fn from_flat(tiles: &[u16], size_x: usize, size_y: usize) -> Self {
         let blank_pos = tiles.iter().position(|&t| t == 0).unwrap();
         PuzzleState {
             tiles: tiles.to_vec(),
@@ -30,10 +30,10 @@ impl PuzzleState {
                 if i == size_x * size_y - 1 {
                     0
                 } else {
-                    (i + 1) as u8
+                    (i + 1) as u16
                 }
             })
-            .collect::<Vec<u8>>();
+            .collect::<Vec<u16>>();
         Self::from_flat(&tiles, size_x, size_y)
     }
 
@@ -328,7 +328,7 @@ fn a_star_search(
 /// Returns: action sequence or None
 #[pyfunction]
 #[pyo3(signature = (start_state, goal_state, max_depth=100))]
-fn solve_puzzle(start_state: Vec<u8>, goal_state: Vec<u8>, max_depth: u32) -> Option<Vec<u8>> {
+fn solve_puzzle(start_state: Vec<u16>, goal_state: Vec<u16>, max_depth: u32) -> Option<Vec<u8>> {
     let start = PuzzleState::from_flat(&start_state, start_state.len() as usize / 3, 3);
     let goal = PuzzleState::from_flat(&goal_state, goal_state.len() as usize / 3, 3);
 
@@ -340,8 +340,8 @@ fn solve_puzzle(start_state: Vec<u8>, goal_state: Vec<u8>, max_depth: u32) -> Op
 #[pyfunction]
 #[pyo3(signature = (start_state, goal_state, max_depth=100, size_x=3, size_y=3))]
 fn solve_puzzle_with_stats(
-    start_state: Vec<u8>,
-    goal_state: Vec<u8>,
+    start_state: Vec<u16>,
+    goal_state: Vec<u16>,
     max_depth: u32,
     size_x: usize,
     size_y: usize,
@@ -357,8 +357,8 @@ fn solve_puzzle_with_stats(
 #[pyfunction]
 #[pyo3(signature = (start_state, goal_state, max_depth=100, size_x=3, size_y=3))]
 fn find_multiple_candidate_a_star_solutions(
-    start_state: Vec<u8>,
-    goal_state: Vec<u8>,
+    start_state: Vec<u16>,
+    goal_state: Vec<u16>,
     max_depth: u32,
     size_x: usize,
     size_y: usize,
@@ -381,7 +381,7 @@ fn find_multiple_candidate_a_star_solutions(
 
 /// Python function: compute heuristic value between two states
 #[pyfunction]
-fn compute_heuristic(state: Vec<u8>, goal_state: Vec<u8>, size_x: usize, size_y: usize) -> u32 {
+fn compute_heuristic(state: Vec<u16>, goal_state: Vec<u16>, size_x: usize, size_y: usize) -> u32 {
     let s = PuzzleState::from_flat(&state, size_x, size_y);
     let g = PuzzleState::from_flat(&goal_state, size_x, size_y);
     let positions = compute_positions(&g);
@@ -408,7 +408,7 @@ fn generate_pair_internal(
     size_y: usize,
     verify: bool,
     fixed_goal: bool,
-) -> Option<(Vec<u8>, Vec<u8>, u8, u32)> {
+) -> Option<(Vec<u16>, Vec<u16>, u8, u32)> {
     for _ in 0..max_attempts {
         let mut end = PuzzleState::random(size_x, size_y);
         if fixed_goal {
@@ -454,7 +454,7 @@ fn generate_pair(
     size_y: usize,
     verify: bool,
     fixed_goal: bool,
-) -> Option<(Vec<u8>, Vec<u8>, u8, u32)> {
+) -> Option<(Vec<u16>, Vec<u16>, u8, u32)> {
     generate_pair_internal(
         target_distance,
         max_attempts,
@@ -486,14 +486,14 @@ fn generate_pairs(
     size_y: usize,
     verify: bool,
     fixed_goal: bool,
-) -> Vec<(Vec<u8>, Vec<u8>, u8, u32)> {
+) -> Vec<(Vec<u16>, Vec<u16>, u8, u32)> {
     let pb = ProgressBar::new(target_distances.len() as u64);
     pb.set_style(ProgressStyle::default_bar()
         .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} Generating pairs without backtracking")
         .expect("Failed to set style")
         .progress_chars("##-"));
 
-    let results: Vec<(Vec<u8>, Vec<u8>, u8, u32)> = target_distances
+    let results: Vec<(Vec<u16>, Vec<u16>, u8, u32)> = target_distances
         .par_iter()
         .map_init(
             || pb.clone(),
@@ -535,7 +535,7 @@ fn generate_pair_with_backtracking(
     target_distance: u32,
     size_x: usize,
     size_y: usize,
-) -> Option<(Vec<u8>, Vec<u8>, u8, u32)> {
+) -> Option<(Vec<u16>, Vec<u16>, u8, u32)> {
     let start = PuzzleState::random(size_x, size_y);
     let (end, first_action) = start.random_walk_with_backtracking(target_distance as usize);
     if let Some(first_action) = first_action {
@@ -550,7 +550,7 @@ fn generate_pairs_with_backtracking(
     target_distances: Vec<u32>,
     size_x: usize,
     size_y: usize,
-) -> Vec<(Vec<u8>, Vec<u8>, u8, u32)> {
+) -> Vec<(Vec<u16>, Vec<u16>, u8, u32)> {
     target_distances
         .par_iter()
         .filter_map(|&dist| generate_pair_with_backtracking(dist, size_x, size_y))
@@ -613,7 +613,7 @@ fn generate_pair_same_blank_internal(
     max_attempts: u32,
     size_x: usize,
     size_y: usize,
-) -> Option<(Vec<u8>, Vec<u8>, u8, u32)> {
+) -> Option<(Vec<u16>, Vec<u16>, u8, u32)> {
     // warning
     // if size_x != 3 || size_y != 3 {
     //     eprintln!("\x1b[1;33m[warning]\x1b[0m \x1b[33mIts not recommended to use this function for puzzles other than 3x3 due to computational complexity.\x1b[0m");
@@ -681,7 +681,7 @@ fn generate_pair_same_blank(
     max_attempts: u32,
     size_x: usize,
     size_y: usize,
-) -> Option<(Vec<u8>, Vec<u8>, u8, u32)> {
+) -> Option<(Vec<u16>, Vec<u16>, u8, u32)> {
     generate_pair_same_blank_internal(target_distance, max_attempts, size_x, size_y)
 }
 
@@ -700,7 +700,7 @@ fn generate_pairs_same_blank(
     max_attempts_per_pair: u32,
     size_x: usize,
     size_y: usize,
-) -> Vec<(Vec<u8>, Vec<u8>, u8, u32)> {
+) -> Vec<(Vec<u16>, Vec<u16>, u8, u32)> {
     // Fixed version: No extraneous code block, just the collection and progress bar in the function body
 
     let pb = ProgressBar::new(target_distances.len() as u64);
@@ -755,7 +755,7 @@ fn generate_dataset(
     p_extended: f64,
     size_x: usize,
     size_y: usize,
-) -> Vec<(Vec<u8>, Vec<u8>, u8, u32, u8)> {
+) -> Vec<(Vec<u16>, Vec<u16>, u8, u32, u8)> {
     if size_x != 3 || size_y != 3 {
         eprintln!("\x1b[1;33m[warning]\x1b[0m \x1b[33mIts not recommended to use this function for puzzles other than 3x3 due to computational complexity.\x1b[0m");
     }
@@ -785,7 +785,8 @@ fn generate_dataset(
     let number_invalid_typ2_pairs =
         ((n_samples as f64 * (1.0 - p_extended)) as usize) - dataset.len() as usize;
 
-    let distro = [3, 5, 7, 9, 11, 13, 15, 17, 19];
+        // let distro = [3, 5, 7, 9, 11, 13, 15, 17, 19];
+    let distro = [3, 5, 7];
     let distances: Vec<u32> = (0..number_invalid_typ2_pairs)
         .map(|_| distro[fastrand::usize(..distro.len())])
         .collect();
@@ -796,9 +797,13 @@ fn generate_dataset(
 
     let number_invalid_typ1_pairs = n_samples - dataset.len() as usize;
 
+    // let distro = [
+    //     2, 2, 3, 4, 4, 5, 6, 6, 7, 8, 8, 9, 10, 10, 11, 12, 12, 13, 14, 14, 15, 16, 16, 17, 18, 18,
+    //     19,
+    // ];
+
     let distro = [
-        2, 2, 3, 4, 4, 5, 6, 6, 7, 8, 8, 9, 10, 10, 11, 12, 12, 13, 14, 14, 15, 16, 16, 17, 18, 18,
-        19,
+        2, 2, 3, 4, 4, 5, 6, 6, 7, 8
     ];
 
     let distances: Vec<u32> = (0..number_invalid_typ1_pairs)
@@ -825,7 +830,7 @@ fn generate_dataset(
 ///     A beautifully formatted string representation of the puzzle
 #[pyfunction]
 #[pyo3(signature = (state, size_x=3, size_y=3))]
-fn pretty_print_state(state: Vec<u8>, size_x: usize, size_y: usize) -> String {
+fn pretty_print_state(state: Vec<u16>, size_x: usize, size_y: usize) -> String {
     let puzzle = PuzzleState::from_flat(&state, size_x, size_y);
 
     // ANSI color codes
@@ -978,8 +983,8 @@ fn pretty_print_state(state: Vec<u8>, size_x: usize, size_y: usize) -> String {
 #[pyfunction]
 #[pyo3(signature = (state1, state2, label1="State 1", label2="State 2", size_x=3, size_y=3))]
 fn pretty_print_pair(
-    state1: Vec<u8>,
-    state2: Vec<u8>,
+    state1: Vec<u16>,
+    state2: Vec<u16>,
     label1: &str,
     label2: &str,
     size_x: usize,
@@ -1037,7 +1042,7 @@ fn pretty_print_pair(
     let h_segment: String = (0..cell_width).map(|_| HORIZONTAL).collect();
 
     fn format_tile(
-        tile: u8,
+        tile: u16,
         tile_colors: &[&str; 16],
         bold: &str,
         dim: &str,
@@ -1229,8 +1234,8 @@ fn compare_datasets_parallel(n: usize, d1_n_samples: usize, d2_n_samples: usize)
 }
 
 fn number_of_equal_pairs(
-    dataset1: &Vec<(Vec<u8>, Vec<u8>, u8, u32, u8)>,
-    dataset2: &Vec<(Vec<u8>, Vec<u8>, u8, u32, u8)>,
+    dataset1: &Vec<(Vec<u16>, Vec<u16>, u8, u32, u8)>,
+    dataset2: &Vec<(Vec<u16>, Vec<u16>, u8, u32, u8)>,
 ) -> u32 {
     // calculate the number of equal pairs in the two datasets
     let pb = ProgressBar::new(dataset1.len() as u64);
